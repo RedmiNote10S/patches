@@ -1,0 +1,593 @@
+diff --git a/core/java/android/util/MtkBoostFramework.java b/core/java/android/util/MtkBoostFramework.java
+new file mode 100755
+index 00000000..05189790
+--- /dev/null
++++ b/core/java/android/util/MtkBoostFramework.java
+@@ -0,0 +1,75 @@
++/*
++ * Copyright (C) 2022 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package android.util;
++
++import android.os.SystemClock;
++import java.lang.reflect.Method;
++
++import com.mediatek.boostframework.Performance;
++
++public class MtkBoostFramework {
++    private static final int SLOW_OPERATION_THRESHOLD_MS = 20;
++    private static final String TAG = "MtkBoostFramework";
++    private Performance mPerf;
++
++    public MtkBoostFramework() {
++        this.mPerf = new Performance();
++    }
++
++    public int perfLockAcquire(int duration, @NonNull int... list) {
++        try {
++            long startTime = SystemClock.uptimeMillis();
++            int handle = this.mPerf.perfLockAcquire(duration, list);
++            checkTime(startTime, "perfLockAcquire");
++            return handle;
++        } catch (Exception e) {
++            Log.e("MtkBoostFramework", "perfLockAcquire " + e);
++            return -1;
++        }
++    }
++
++    public int perfLockRelease() {
++        try {
++            long startTime = SystemClock.uptimeMillis();
++            int status = this.mPerf.perfLockRelease();
++            checkTime(startTime, "perfLockRelease");
++            return status;
++        } catch (Exception e) {
++            Log.e("MtkBoostFramework", "perfLockRelease " + e);
++            return -1;
++        }
++    }
++
++    public int perfLockReleaseHandler(int handle) {
++        try {
++            long startTime = SystemClock.uptimeMillis();
++            int status = this.mPerf.perfLockRelease(handle);
++            checkTime(startTime, "perfLockReleaseHandler");
++            return status;
++        } catch (Exception e) {
++            Log.e("MtkBoostFramework", "perfLockReleaseHandler " + e);
++            return -1;
++        }
++    }
++
++    private void checkTime(long start, String method) {
++        long duration = SystemClock.uptimeMillis() - start;
++        if (duration > SLOW_OPERATION_THRESHOLD_MS) {
++            Slog.w("MtkBoostFramework", String.format("Slow Operation: MtkBoostFramework %s took %sms", method, Long.valueOf(duration)));
++        }
++    }
++}
+diff --git a/core/java/com/mediatek/boostframework/Performance.java b/core/java/com/mediatek/boostframework/Performance.java
+new file mode 100755
+index 00000000..7260f769
+--- /dev/null
++++ b/core/java/com/mediatek/boostframework/Performance.java
+@@ -0,0 +1,61 @@
++/*
++ * Copyright (C) 2022 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.mediatek.boostframework;
++
++import android.util.Log;
++import com.mediatek.powerhalwrapper.PowerHalWrapper;
++
++public class Performance {
++    private static final String TAG = "Performance";
++    private static PowerHalWrapper mPowerHalWrap = null;
++    private int mhandle = 0;
++
++    public Performance() {
++        mPowerHalWrap = PowerHalWrapper.getInstance();
++    }
++
++    public int perfchecklist(int... list) {
++        return list.length % 2 == 0 ? 1 : 0;
++    }
++
++    public int perfLockAcquire(int duration, int... list) {
++        if (perfchecklist(list) == 0) {
++            return -1;
++        }
++        int perfLockAcquire = mPowerHalWrap.perfLockAcquire(this.mhandle, duration, list);
++        this.mhandle = perfLockAcquire;
++        return perfLockAcquire;
++    }
++
++    public int perfLockRelease() {
++        mPowerHalWrap.perfLockRelease(this.mhandle);
++        return 0;
++    }
++
++    public int perfLockRelease(int handle) {
++        mPowerHalWrap.perfLockRelease(handle);
++        return 0;
++    }
++
++    private static void log(String info) {
++        Log.d("@M_Performance", "[Performance] " + info + " ");
++    }
++
++    private static void loge(String info) {
++        Log.e("@M_Performance", "[Performance] ERR: " + info + " ");
++    }
++}
+diff --git a/core/java/com/mediatek/powerhalwrapper/PowerHalWrapper.java b/core/java/com/mediatek/powerhalwrapper/PowerHalWrapper.java
+new file mode 100755
+index 00000000..b61addaf
+--- /dev/null
++++ b/core/java/com/mediatek/powerhalwrapper/PowerHalWrapper.java
+@@ -0,0 +1,380 @@
++/*
++ * Copyright (C) 2022 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.mediatek.powerhalwrapper;
++
++import android.os.Binder;
++import android.os.Build;
++import android.os.Process;
++import android.os.Trace;
++import android.util.Log;
++import java.util.ArrayList;
++import java.util.Iterator;
++import java.util.List;
++import java.util.concurrent.locks.Lock;
++import java.util.concurrent.locks.ReentrantLock;
++
++public class PowerHalWrapper {
++    private static final int AMS_BOOST_TIME = 10000;
++
++    public static final int MAX_NETD_IP_FILTER_COUNT = 3;
++
++    public static final int MTKPOWER_CMD_GET_POWER_SCN_TYPE = 105;
++    public static final int MTKPOWER_CMD_GET_RILD_CAP = 40;
++    private static final int MTKPOWER_HINT_ACT_SWITCH = 23;
++    private static final int MTKPOWER_HINT_ALWAYS_ENABLE = 268435455;
++    private static final int MTKPOWER_HINT_APP_ROTATE = 24;
++    private static final int MTKPOWER_HINT_EXT_LAUNCH = 30;
++    private static final int MTKPOWER_HINT_GALLERY_BOOST = 26;
++    private static final int MTKPOWER_HINT_PACK_SWITCH = 22;
++    private static final int MTKPOWER_HINT_PMS_INSTALL = 29;
++    private static final int MTKPOWER_HINT_PROCESS_CREATE = 21;
++    private static final int MTKPOWER_HINT_WFD = 28;
++    private static final int MTKPOWER_HINT_WIPHY_SPEED_DL = 32;
++    private static final int MTKPOWER_STATE_DEAD = 3;
++    private static final int MTKPOWER_STATE_DESTORYED = 2;
++    private static final int MTKPOWER_STATE_PAUSED = 0;
++    private static final int MTKPOWER_STATE_RESUMED = 1;
++    private static final int MTKPOWER_STATE_STOPPED = 4;
++
++    public static final int PERF_RES_NET_MD_CRASH_PID = 41992960;
++    public static final int PERF_RES_NET_WIFI_SMART_PREDICT = 41959680;
++    public static final int PERF_RES_POWERHAL_SCREEN_OFF_STATE = 54525952;
++
++    public static final int POWER_HIDL_SET_SYS_INFO = 0;
++
++    public static final int SCN_PERF_LOCK_HINT = 3;
++    public static final int SCN_USER_HINT = 2;
++
++    public static final int SCREEN_OFF_DISABLE = 0;
++    public static final int SCREEN_OFF_ENABLE = 1;
++    public static final int SCREEN_OFF_WAIT_RESTORE = 2;
++
++    public static final int SETSYS_FOREGROUND_SPORTS = 3;
++    public static final int SETSYS_INTERNET_STATUS = 5;
++    public static final int SETSYS_MANAGEMENT_PERIODIC = 4;
++    public static final int SETSYS_MANAGEMENT_PREDICT = 1;
++    public static final int SETSYS_NETD_DUPLICATE_PACKET_LINK = 8;
++    public static final int SETSYS_NETD_STATUS = 6;
++    public static final int SETSYS_PACKAGE_VERSION_NAME = 9;
++    public static final int SETSYS_PREDICT_INFO = 7;
++    public static final int SETSYS_SPORTS_APK = 2;
++
++    private static final String TAG = "PowerHalWrapper";
++    private static final int USER_DURATION_MAX = 30000;
++
++    private static boolean AMS_BOOST_PROCESS_CREATE = true;
++    private static boolean AMS_BOOST_PROCESS_CREATE_BOOST = true;
++    private static boolean AMS_BOOST_PACK_SWITCH = true;
++    private static boolean AMS_BOOST_ACT_SWITCH = true;
++
++    private static PowerHalWrapper sInstance = null;
++
++    private static Object lock = new Object();
++    private Lock mLock = new ReentrantLock();
++
++    private static String mProcessCreatePack = null;
++    private static final boolean ENG = "eng".equals(Build.TYPE);
++    public List<ScnList> scnlist = new ArrayList();
++
++    public static native int nativeMtkCusPowerHint(int i, int i2);
++
++    public static native int nativeMtkPowerHint(int i, int i2);
++
++    public static native int nativeNotifyAppState(String str, String str2, int i, int i2, int i3);
++
++    public static native int nativePerfCusLockHint(int i, int i2);
++
++    public static native int nativePerfLockAcq(int i, int i2, int... iArr);
++
++    public static native int nativePerfLockRel(int i);
++
++    public static native int nativeQuerySysInfo(int i, int i2);
++
++    public static native int nativeScnConfig(int i, int i2, int i3, int i4, int i5, int i6);
++
++    public static native int nativeScnDisable(int i);
++
++    public static native int nativeScnEnable(int i, int i2);
++
++    public static native int nativeScnReg();
++
++    public static native int nativeScnUltraCfg(int i, int i2, int i3, int i4, int i5, int i6);
++
++    public static native int nativeScnUnreg(int i);
++
++    public static native int nativeSetSysInfo(String str, int i);
++
++    public static native int nativeSetSysInfoAsync(String str, int i);
++
++    static {
++        System.loadLibrary("powerhalwrap_jni");
++    }
++
++    public static PowerHalWrapper getInstance() {
++        PowerHalWrapper powerHalWrapper;
++        log("PowerHalWrapper.getInstance");
++        synchronized (lock) {
++            if (sInstance == null) {
++                sInstance = new PowerHalWrapper();
++            }
++            powerHalWrapper = sInstance;
++        }
++        return powerHalWrapper;
++    }
++
++    public void mtkPowerHint(int hint, int data) {
++        nativeMtkPowerHint(hint, data);
++    }
++
++    public void mtkCusPowerHint(int hint, int data) {
++        nativeMtkCusPowerHint(hint, data);
++    }
++
++    public int perfLockAcquire(int handle, int duration, int... list) {
++        int pid = Binder.getCallingPid();
++        int uid = Binder.getCallingUid();
++        int new_hdl = nativePerfLockAcq(handle, duration, list);
++        if (new_hdl > 0 && new_hdl != handle && (duration > USER_DURATION_MAX || duration == 0)) {
++            this.mLock.lock();
++            this.scnlist.add(new ScnList(new_hdl, pid, uid));
++            this.mLock.unlock();
++        }
++        return new_hdl;
++    }
++
++    public void perfLockRelease(int handle) {
++        this.mLock.lock();
++        List<ScnList> list = this.scnlist;
++        if (list != null && list.size() > 0) {
++            Iterator<ScnList> iter = this.scnlist.iterator();
++            while (iter.hasNext()) {
++                if (iter.next().gethandle() == handle) {
++                    iter.remove();
++                }
++            }
++        }
++        this.mLock.unlock();
++        nativePerfLockRel(handle);
++    }
++
++    public int perfCusLockHint(int hint, int duration) {
++        return nativePerfCusLockHint(hint, duration);
++    }
++
++    public int scnReg() {
++        loge("scnReg not support!!!");
++        return -1;
++    }
++
++    public int scnConfig(int hdl, int cmd, int param_1, int param_2, int param_3, int param_4) {
++        loge("scnConfig not support!!!");
++        return 0;
++    }
++
++    public int scnUnreg(int hdl) {
++        loge("scnUnreg not support!!!");
++        return 0;
++    }
++
++    public int scnEnable(int hdl, int timeout) {
++        loge("scnEnable not support!!!");
++        return 0;
++    }
++
++    public int scnDisable(int hdl) {
++        loge("scnDisable not support!!!");
++        return 0;
++    }
++
++    public int scnUltraCfg(int hdl, int ultracmd, int param_1, int param_2, int param_3, int param_4) {
++        loge("scnUltraCfg not support!!!");
++        return 0;
++    }
++
++    public void getCpuCap() {
++        log("getCpuCap");
++    }
++
++    public void getGpuCap() {
++        log("mGpuCap");
++    }
++
++    public void getGpuRTInfo() {
++        log("getGpuCap");
++    }
++
++    public void getCpuRTInfo() {
++        log("mCpuRTInfo");
++    }
++
++    public void UpdateManagementPkt(int type, String packet) {
++        logd("<UpdateManagementPkt> type:" + type + ", packet:" + packet);
++        if (type == 1) {
++            nativeSetSysInfo(packet, SETSYS_MANAGEMENT_PREDICT);
++        } else if (type == 4) {
++            nativeSetSysInfo(packet, SETSYS_MANAGEMENT_PERIODIC);
++        }
++    }
++
++    public int setSysInfo(int type, String data) {
++        return nativeSetSysInfo(data, type);
++    }
++
++    public void setSysInfoAsync(int type, String data) {
++        nativeSetSysInfoAsync(data, type);
++    }
++
++    public int querySysInfo(int cmd, int param) {
++        logd("<querySysInfo> cmd:" + cmd + " param:" + param);
++        return nativeQuerySysInfo(cmd, param);
++    }
++
++    public void galleryBoostEnable(int timeoutMs) {
++        log("<galleryBoostEnable> do boost with " + timeoutMs + "ms");
++        nativeMtkPowerHint(MTKPOWER_HINT_GALLERY_BOOST, timeoutMs);
++    }
++
++    public void setRotationBoost(int boostTime) {
++        log("<setRotation> do boost with " + boostTime + "ms");
++        nativeMtkPowerHint(MTKPOWER_HINT_APP_ROTATE, boostTime);
++    }
++
++    public void setSpeedDownload(int timeoutMs) {
++        log("<setSpeedDownload> do boost with " + timeoutMs + "ms");
++        nativeMtkPowerHint(MTKPOWER_HINT_WIPHY_SPEED_DL, timeoutMs);
++    }
++
++    public void setWFD(boolean enable) {
++        log("<setWFD> enable:" + enable);
++        if (enable) {
++            nativeMtkPowerHint(MTKPOWER_HINT_WFD, 268435455); // That timeout is uh... very long
++        } else {
++            nativeMtkPowerHint(MTKPOWER_HINT_WFD, 0);
++        }
++    }
++
++    public void setSportsApk(String pack) {
++        log("<setSportsApk> pack:" + pack);
++        nativeSetSysInfo(pack, SETSYS_SPORTS_APK);
++    }
++
++    public void NotifyAppCrash(int pid, int uid, String packageName) {
++        int found = 0;
++        int myPid = Process.myPid();
++        if (myPid == pid) {
++            log("<NotifyAppCrash> pack:" + packageName + " ,pid:" + packageName + " == myPid:" + myPid);
++            return;
++        }
++        nativeNotifyAppState(packageName, packageName, pid, 3, uid);
++        this.mLock.lock();
++        List<ScnList> list = this.scnlist;
++        if (list != null && list.size() > 0) {
++            Iterator<ScnList> iter = this.scnlist.iterator();
++            while (iter.hasNext()) {
++                ScnList item = iter.next();
++                if (item.getpid() == pid) {
++                    nativePerfLockRel(item.gethandle());
++                    log("<NotifyAppCrash> pid:" + item.getpid() + " uid:" + item.getuid() + " handle:" + item.gethandle());
++                    iter.remove();
++                    found++;
++                }
++            }
++        }
++        this.mLock.unlock();
++    }
++
++    public boolean getRildCap(int uid) {
++        return nativeQuerySysInfo(MTKPOWER_CMD_GET_RILD_CAP, uid) == 1;
++    }
++
++    public void setInstallationBoost(boolean enable) {
++        log("<setInstallationBoost> enable:" + enable);
++        if (enable) {
++            nativeMtkPowerHint(MTKPOWER_HINT_PMS_INSTALL, 15000);
++        } else {
++            nativeMtkPowerHint(MTKPOWER_HINT_PMS_INSTALL, 0);
++        }
++    }
++
++    public void amsBoostResume(String lastResumedPackageName, String nextResumedPackageName) {
++        logd("<amsBoostResume> last:" + lastResumedPackageName + ", next:" + nextResumedPackageName);
++        Trace.asyncTraceBegin(64, "amPerfBoost", 0);
++        nativeMtkPowerHint(MTKPOWER_HINT_EXT_LAUNCH, 0);
++        if (lastResumedPackageName == null || !lastResumedPackageName.equalsIgnoreCase(nextResumedPackageName)) {
++            AMS_BOOST_PACK_SWITCH = true;
++            nativeMtkPowerHint(MTKPOWER_HINT_PACK_SWITCH, 10000);
++            return;
++        }
++        AMS_BOOST_ACT_SWITCH = true;
++        nativeMtkPowerHint(MTKPOWER_HINT_ACT_SWITCH, 10000);
++    }
++
++    public void amsBoostProcessCreate(String hostingType, String packageName) {
++        if (hostingType != null && hostingType.contains("activity")) {
++            logd("amsBoostProcessCreate package:" + packageName);
++            Trace.asyncTraceBegin(64, "amPerfBoost", 0);
++            AMS_BOOST_PROCESS_CREATE = true;
++            AMS_BOOST_PROCESS_CREATE_BOOST = true;
++            mProcessCreatePack = packageName;
++            nativeMtkPowerHint(MTKPOWER_HINT_EXT_LAUNCH, 0);
++            nativeMtkPowerHint(MTKPOWER_HINT_PROCESS_CREATE, 10000);
++        }
++    }
++
++    public void amsBoostStop() {
++        logd("amsBoostStop AMS_BOOST_PACK_SWITCH:" + AMS_BOOST_PACK_SWITCH + ", AMS_BOOST_ACT_SWITCH:" + AMS_BOOST_ACT_SWITCH + ", AMS_BOOST_PROCESS_CREATE:" + AMS_BOOST_PROCESS_CREATE);
++        if (AMS_BOOST_PACK_SWITCH) {
++            AMS_BOOST_PACK_SWITCH = false;
++            nativeMtkPowerHint(MTKPOWER_HINT_PACK_SWITCH, 0);
++        }
++        if (AMS_BOOST_ACT_SWITCH) {
++            AMS_BOOST_ACT_SWITCH = false;
++            nativeMtkPowerHint(MTKPOWER_HINT_ACT_SWITCH, 0);
++        }
++        if (AMS_BOOST_PROCESS_CREATE) {
++            AMS_BOOST_PROCESS_CREATE = false;
++            nativeMtkPowerHint(MTKPOWER_HINT_PROCESS_CREATE, 0);
++        }
++        Trace.asyncTraceEnd(64, "amPerfBoost", 0);
++    }
++
++    public void amsBoostNotify(int pid, String activityName, String packageName, int uid) {
++        logd("amsBoostNotify pid:" + pid + ",activity:" + activityName + ", package:" + packageName + ", mProcessCreatePack" + mProcessCreatePack);
++        nativeNotifyAppState(packageName, activityName, pid, 1, uid);
++        if (!packageName.equalsIgnoreCase(mProcessCreatePack)) {
++            logd("amsBoostNotify AMS_BOOST_PROCESS_CREATE_BOOST:" + AMS_BOOST_PROCESS_CREATE_BOOST);
++            if (AMS_BOOST_PROCESS_CREATE_BOOST) {
++                nativeMtkPowerHint(MTKPOWER_HINT_PROCESS_CREATE, 1);
++            }
++            AMS_BOOST_PROCESS_CREATE_BOOST = false;
++        }
++    }
++
++    private static void log(String info) {
++        Log.i("PowerHalWrapper", info + " ");
++    }
++
++    private static void logd(String info) {
++        if (ENG) {
++            Log.d("PowerHalWrapper", info + " ");
++        }
++    }
++
++    private static void loge(String info) {
++        Log.e("PowerHalWrapper", "ERR: " + info + " ");
++    }
++}
+diff --git a/core/java/com/mediatek/powerhalwrapper/ScnList.java b/core/java/com/mediatek/powerhalwrapper/ScnList.java
+new file mode 100755
+index 00000000..e81dd914
+--- /dev/null
++++ b/core/java/com/mediatek/powerhalwrapper/ScnList.java
+@@ -0,0 +1,53 @@
++/*
++ * Copyright (C) 2022 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.mediatek.powerhalwrapper;
++
++public class ScnList {
++    public int handle;
++    public int pid;
++    public int uid;
++
++    public ScnList(int handle, int pid, int uid) {
++        this.handle = handle;
++        this.pid = pid;
++        this.uid = uid;
++    }
++
++    public int getpid() {
++        return this.pid;
++    }
++
++    public void setpid(int pid) {
++        this.pid = pid;
++    }
++
++    public int getuid() {
++        return this.uid;
++    }
++
++    public void setPack_Name(int uid) {
++        this.uid = uid;
++    }
++
++    public int gethandle() {
++        return this.handle;
++    }
++
++    public void sethandle(int handle) {
++        this.handle = handle;
++    }
++}
